@@ -104,7 +104,7 @@ const arbitrary = zodFastCheck.inputOf(z.array(WithFoo));
 
 ### Data types
 
-✅ string (including email, datetime, UUID and URL)  
+✅ string (including email, datetime, UUID, URL, and regex patterns)  
 ✅ number  
 ✅ nan  
 ✅ bigint  
@@ -179,6 +179,30 @@ The following are supported only when using `zod-fast-check/v4`:
 ❌ file
 ❌ templateLiteral
 ❌ custom
+
+### Regex Patterns
+
+Regex patterns (`z.string().regex(...)`) are natively supported using `fc.stringMatching()`, which efficiently generates strings matching the pattern rather than filtering random strings.
+
+**Supported regex features:**
+- Character classes: `[a-z]`, `\d`, `\w`, `\s`, `.`
+- Quantifiers: `*`, `+`, `?`, `{n}`, `{n,m}`
+- Alternation: `(a|b)`
+- Anchors: `^`, `$`
+- Groups: `(...)`, `(?:...)`
+- Escapes: `\.`, `\-`, etc.
+
+**Unsupported regex features** (fall back to filtering):
+- Word boundaries: `\b`, `\B`
+- Lookahead: `(?=...)`, `(?!...)`
+- Lookbehind: `(?<=...)`, `(?<!...)`
+
+For unsupported features or highly restrictive patterns, use an override:
+
+```ts
+const WordPattern = z.string().regex(/\btest\b/);
+const zfc = ZodFastCheck().override(WordPattern, fc.constant("test"));
+```
 
 ### Refinements
 

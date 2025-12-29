@@ -98,13 +98,27 @@ interface Zod4Schema {
   _zod: Zod4Internals;
   _input: unknown;
   _output: unknown;
-  safeParse: (data: unknown) => { success: boolean; data?: unknown; error?: unknown };
+  safeParse: (data: unknown) => {
+    success: boolean;
+    data?: unknown;
+    error?: unknown;
+  };
   unwrap?: () => Zod4Schema;
 }
 
 const MIN_SUCCESS_RATE = 0.01;
 const ZOD_EMAIL_REGEX =
   /^(?!\.)(?!.*\.\.)([A-Z0-9_'+\-\.]*)[A-Z0-9_+-]@([A-Z0-9][A-Z0-9\-]*\.)+[A-Z]{2,}$/i;
+
+/**
+ * Check if a regex uses features not supported by fc.stringMatching().
+ * Unsupported features: word boundaries (\b, \B), lookahead/lookbehind ((?=, (?!, (?<=, (?<!)
+ */
+function hasUnsupportedRegexFeatures(regex: RegExp): boolean {
+  const pattern = regex.source;
+  // Word boundaries and lookahead/lookbehind assertions
+  return /\\[bB]|\(\?[=!]|\(\?<[=!]/.test(pattern);
+}
 
 type UnknownZodSchema = Zod4Schema;
 
@@ -162,13 +176,12 @@ class _ZodFastCheck {
   inputOf<Schema extends ZodSchema<any, any>>(
     schema: Schema
   ): Arbitrary<input<Schema>> {
-    return this.inputWithPath(schema as unknown as Zod4Schema, "") as Arbitrary<input<Schema>>;
+    return this.inputWithPath(schema as unknown as Zod4Schema, "") as Arbitrary<
+      input<Schema>
+    >;
   }
 
-  private inputWithPath(
-    schema: Zod4Schema,
-    path: string
-  ): Arbitrary<unknown> {
+  private inputWithPath(schema: Zod4Schema, path: string): Arbitrary<unknown> {
     const override = this.findOverride(schema);
 
     if (override) {
@@ -213,9 +226,7 @@ class _ZodFastCheck {
       .map((parsed) => parsed.data) as Arbitrary<output<Schema>>;
   }
 
-  private findOverride(
-    schema: Zod4Schema
-  ): Arbitrary<unknown> | null {
+  private findOverride(schema: Zod4Schema): Arbitrary<unknown> | null {
     const override = this.overrides.get(schema);
 
     if (override) {
@@ -273,7 +284,10 @@ const arbitraryBuilders: ArbitraryBuilders = {
     }
     if (format === "cuid2") {
       // cuid2 is 24 characters of lowercase alphanumeric
-      return fc.stringOf(fc.constantFrom(...'abcdefghijklmnopqrstuvwxyz0123456789'.split('')), { minLength: 24, maxLength: 24 });
+      return fc.stringOf(
+        fc.constantFrom(..."abcdefghijklmnopqrstuvwxyz0123456789".split("")),
+        { minLength: 24, maxLength: 24 }
+      );
     }
     if (format === "datetime") {
       return createDatetimeStringArb(schema);
@@ -348,6 +362,7 @@ const arbitraryBuilders: ArbitraryBuilders = {
     // Check for checks array for startsWith/endsWith/regex
     const checks = schema._def.checks ?? [];
     const mappings: Array<(s: string) => string> = [];
+    const regexPatterns: RegExp[] = [];
     let hasUnsupportedCheck = false;
 
     for (const check of checks) {
@@ -361,7 +376,13 @@ const arbitraryBuilders: ArbitraryBuilders = {
           mappings.push((s) => checkDef.prefix + s);
         } else if (checkFormat === "ends_with" && checkDef.suffix) {
           mappings.push((s) => s + checkDef.suffix);
-        } else if (checkFormat === "regex" || checkFormat === "includes") {
+        } else if (checkFormat === "regex") {
+          // Extract regex pattern for native generation
+          const pattern = checkDef.pattern;
+          if (pattern instanceof RegExp) {
+            regexPatterns.push(pattern);
+          }
+        } else if (checkFormat === "includes") {
           hasUnsupportedCheck = true;
         }
         // Other string_format checks (trim, lowercase, uppercase) don't need special handling for inputs
@@ -372,6 +393,56 @@ const arbitraryBuilders: ArbitraryBuilders = {
     }
 
     if (maxLength === null) maxLength = 2 * minLength + 10;
+
+    // If we have regex patterns and they use supported features, use fc.stringMatching()
+    if (regexPatterns.length > 0) {
+      // Check if any regex has unsupported features
+      const hasUnsupportedRegex = regexPatterns.some(
+        hasUnsupportedRegexFeatures
+      );
+
+      if (!hasUnsupportedRegex) {
+        try {
+          // Use the first regex for generation
+          let arb: Arbitrary<string> = fc.stringMatching(regexPatterns[0]);
+
+          // Apply length constraints if specified
+          if (minLength > 0 || maxLength !== 2 * minLength + 10) {
+            arb = arb.filter(
+              (s) =>
+                s.length >= minLength &&
+                (maxLength === null || s.length <= maxLength)
+            );
+          }
+
+          // Apply startsWith/endsWith mappings
+          for (const mapping of mappings) {
+            arb = arb.map(mapping);
+          }
+
+          // If multiple regexes, filter by additional ones
+          if (regexPatterns.length > 1) {
+            arb = arb.filter((s) =>
+              regexPatterns.slice(1).every((r) => r.test(s))
+            );
+          }
+
+          // If there are other unsupported checks (custom refinements, includes), filter against schema
+          if (hasUnsupportedCheck) {
+            return filterArbitraryBySchema(arb, schema, path);
+          }
+
+          // Final validation against the full schema to catch any edge cases
+          return filterArbitraryBySchema(arb, schema, path);
+        } catch {
+          // Fall back to filtering if fc.stringMatching() fails
+          hasUnsupportedCheck = true;
+        }
+      } else {
+        // Has unsupported regex features, fall back to filtering
+        hasUnsupportedCheck = true;
+      }
+    }
 
     let unfiltered = fc.string({
       minLength,
@@ -407,14 +478,17 @@ const arbitraryBuilders: ArbitraryBuilders = {
 
     // Check if it's an integer type (format: 'safeint' or 'int')
     const format = bag.format;
-    const isInt = format === 'safeint' || format === 'int';
+    const isInt = format === "safeint" || format === "int";
 
     // Collect all multipleOf constraints from checks array
     const checks = schema._def.checks ?? [];
     const multipleOfs: number[] = [];
     for (const check of checks) {
       const checkDef = check._zod?.def ?? check;
-      if (checkDef.check === 'multiple_of' && typeof checkDef.value === 'number') {
+      if (
+        checkDef.check === "multiple_of" &&
+        typeof checkDef.value === "number"
+      ) {
         multipleOfs.push(checkDef.value);
       }
     }
@@ -428,7 +502,7 @@ const arbitraryBuilders: ArbitraryBuilders = {
     // Check for custom refinements
     const hasCustomRefinement = checks.some((c: any) => {
       const checkDef = c._zod?.def ?? c;
-      return checkDef.check === 'custom';
+      return checkDef.check === "custom";
     });
 
     if (multipleOfs.length > 0) {
@@ -474,8 +548,12 @@ const arbitraryBuilders: ArbitraryBuilders = {
   int(schema: Zod4Schema) {
     const bag = schema._zod?.bag ?? {};
 
-    let min = Math.ceil(bag.minimum ?? bag.exclusiveMinimum ?? Number.MIN_SAFE_INTEGER);
-    let max = Math.floor(bag.maximum ?? bag.exclusiveMaximum ?? Number.MAX_SAFE_INTEGER);
+    let min = Math.ceil(
+      bag.minimum ?? bag.exclusiveMinimum ?? Number.MIN_SAFE_INTEGER
+    );
+    let max = Math.floor(
+      bag.maximum ?? bag.exclusiveMaximum ?? Number.MAX_SAFE_INTEGER
+    );
 
     // Handle exclusive bounds
     if (bag.exclusiveMinimum !== undefined && bag.minimum === undefined) {
@@ -656,7 +734,9 @@ const arbitraryBuilders: ArbitraryBuilders = {
   enum(schema: Zod4Schema) {
     const entries = schema._def.entries ?? {};
     // Filter out reverse mappings (numeric keys that map back to string names)
-    const values = getValidEnumValues(entries as Record<string | number, string | number>);
+    const values = getValidEnumValues(
+      entries as Record<string | number, string | number>
+    );
     return fc.oneof(...values.map((v) => fc.constant(v)));
   },
 
@@ -708,7 +788,10 @@ const arbitraryBuilders: ArbitraryBuilders = {
     // nonoptional wraps an optional schema and removes the undefined option
     // We need to drill down through optional/nullable wrappers to get the actual type
     let innerType = schema._def.innerType as Zod4Schema;
-    while (innerType && (innerType._def.type === 'optional' || innerType._def.type === 'nullable')) {
+    while (
+      innerType &&
+      (innerType._def.type === "optional" || innerType._def.type === "nullable")
+    ) {
       innerType = innerType._def.innerType as Zod4Schema;
     }
     return recurse(innerType, path);
@@ -803,7 +886,7 @@ export class ZodFastCheckGenerationError extends ZodFastCheckError {}
 
 function unsupported(schemaTypeName: string, path: string): never {
   // Remove quotes from schemaTypeName if present (for consistency)
-  const cleanName = schemaTypeName.replace(/^'|'$/g, '');
+  const cleanName = schemaTypeName.replace(/^'|'$/g, "");
   throw new ZodFastCheckUnsupportedSchemaError(
     `Unable to generate valid values for Zod schema. ` +
       `${cleanName} schemas are not supported (at path '${path || "."}').`
@@ -829,118 +912,180 @@ function createCuidArb(): Arbitrary<string> {
 
 // ULID: 26 chars Crockford base32 (excludes I, L, O, U)
 // Pattern: /^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$/
-const CROCKFORD_BASE32 = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+const CROCKFORD_BASE32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 function createUlidArb(): Arbitrary<string> {
-  return fc.stringOf(
-    fc.constantFrom(...CROCKFORD_BASE32.split('')),
-    { minLength: 26, maxLength: 26 }
-  );
+  return fc.stringOf(fc.constantFrom(...CROCKFORD_BASE32.split("")), {
+    minLength: 26,
+    maxLength: 26,
+  });
 }
 
 // NanoID: 21 chars URL-safe alphabet
 // Pattern: /^[a-zA-Z0-9_-]{21}$/
-const NANOID_ALPHABET = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-';
+const NANOID_ALPHABET =
+  "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-";
 function createNanoidArb(): Arbitrary<string> {
-  return fc.stringOf(
-    fc.constantFrom(...NANOID_ALPHABET.split('')),
-    { minLength: 21, maxLength: 21 }
-  );
+  return fc.stringOf(fc.constantFrom(...NANOID_ALPHABET.split("")), {
+    minLength: 21,
+    maxLength: 21,
+  });
 }
 
 // XID: 20 chars base32 variant (0-9, a-v)
 // Pattern: /^[0-9a-vA-V]{20}$/
-const XID_ALPHABET = '0123456789abcdefghijklmnopqrstuv';
+const XID_ALPHABET = "0123456789abcdefghijklmnopqrstuv";
 function createXidArb(): Arbitrary<string> {
-  return fc.stringOf(
-    fc.constantFrom(...XID_ALPHABET.split('')),
-    { minLength: 20, maxLength: 20 }
-  );
+  return fc.stringOf(fc.constantFrom(...XID_ALPHABET.split("")), {
+    minLength: 20,
+    maxLength: 20,
+  });
 }
 
 // KSUID: 27 chars base62
 // Pattern: /^[A-Za-z0-9]{27}$/
-const BASE62 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+const BASE62 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 function createKsuidArb(): Arbitrary<string> {
-  return fc.stringOf(
-    fc.constantFrom(...BASE62.split('')),
-    { minLength: 27, maxLength: 27 }
-  );
+  return fc.stringOf(fc.constantFrom(...BASE62.split("")), {
+    minLength: 27,
+    maxLength: 27,
+  });
 }
 
 // CIDR v4: IPv4 address + "/" + prefix length (0-32)
 function createCidrV4Arb(): Arbitrary<string> {
-  return fc.tuple(
-    fc.ipV4(),
-    fc.integer({ min: 0, max: 32 })
-  ).map(([ip, prefix]) => `${ip}/${prefix}`);
+  return fc
+    .tuple(fc.ipV4(), fc.integer({ min: 0, max: 32 }))
+    .map(([ip, prefix]) => `${ip}/${prefix}`);
 }
 
 // CIDR v6: IPv6 address + "/" + prefix length (0-128)
 function createCidrV6Arb(): Arbitrary<string> {
-  return fc.tuple(
-    fc.ipV6(),
-    fc.integer({ min: 0, max: 128 })
-  ).map(([ip, prefix]) => `${ip}/${prefix}`);
+  return fc
+    .tuple(fc.ipV6(), fc.integer({ min: 0, max: 128 }))
+    .map(([ip, prefix]) => `${ip}/${prefix}`);
 }
 
 // MAC address: 6 pairs of hex digits joined by ":"
 function createMacArb(): Arbitrary<string> {
-  return fc.tuple(
-    fc.hexaString({ minLength: 2, maxLength: 2 }),
-    fc.hexaString({ minLength: 2, maxLength: 2 }),
-    fc.hexaString({ minLength: 2, maxLength: 2 }),
-    fc.hexaString({ minLength: 2, maxLength: 2 }),
-    fc.hexaString({ minLength: 2, maxLength: 2 }),
-    fc.hexaString({ minLength: 2, maxLength: 2 })
-  ).map((parts) => parts.join(':'));
+  return fc
+    .tuple(
+      fc.hexaString({ minLength: 2, maxLength: 2 }),
+      fc.hexaString({ minLength: 2, maxLength: 2 }),
+      fc.hexaString({ minLength: 2, maxLength: 2 }),
+      fc.hexaString({ minLength: 2, maxLength: 2 }),
+      fc.hexaString({ minLength: 2, maxLength: 2 }),
+      fc.hexaString({ minLength: 2, maxLength: 2 })
+    )
+    .map((parts) => parts.join(":"));
 }
 
 // E.164 phone number: "+" followed by 7-15 digits
 // Pattern: /^\+[1-9]\d{6,14}$/
 function createE164Arb(): Arbitrary<string> {
-  return fc.tuple(
-    fc.integer({ min: 1, max: 9 }),
-    fc.stringOf(fc.constantFrom(...'0123456789'.split('')), { minLength: 6, maxLength: 14 })
-  ).map(([first, rest]) => `+${first}${rest}`);
+  return fc
+    .tuple(
+      fc.integer({ min: 1, max: 9 }),
+      fc.stringOf(fc.constantFrom(..."0123456789".split("")), {
+        minLength: 6,
+        maxLength: 14,
+      })
+    )
+    .map(([first, rest]) => `+${first}${rest}`);
 }
 
 // Base64URL: URL-safe base64 that can be decoded
 // Must be valid base64 (length must be 4k, 4k+2, or 4k+3 for proper decoding)
 function createBase64UrlArb(): Arbitrary<string> {
   // Generate random bytes and encode them as base64url
-  return fc.array(fc.integer({ min: 0, max: 255 }), { minLength: 0, maxLength: 50 })
+  return fc
+    .array(fc.integer({ min: 0, max: 255 }), { minLength: 0, maxLength: 50 })
     .map((bytes) => {
       // Convert bytes to base64url
       const uint8Array = new Uint8Array(bytes);
       const base64 = btoa(String.fromCharCode(...uint8Array));
       // Convert to base64url: replace + with -, / with _, remove padding
-      return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+      return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
     });
 }
 
 // Emoji: Unicode emoji characters
 // Uses Extended_Pictographic and Emoji_Component
 const COMMON_EMOJIS = [
-  '😀', '😃', '😄', '😁', '😅', '😂', '🤣', '😊', '😇', '🙂',
-  '😉', '😌', '😍', '🥰', '😘', '😗', '😙', '😚', '😋', '😛',
-  '❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍', '🤎', '💔',
-  '👍', '👎', '👊', '✊', '🤛', '🤜', '🤝', '👏', '🙌', '👐',
-  '🎉', '🎊', '🎈', '🎁', '🎄', '🎃', '🎗️', '🎟️', '🎫', '🏆',
-  '⭐', '🌟', '✨', '💫', '🌙', '☀️', '🌈', '☁️', '⛅', '🌤️',
+  "😀",
+  "😃",
+  "😄",
+  "😁",
+  "😅",
+  "😂",
+  "🤣",
+  "😊",
+  "😇",
+  "🙂",
+  "😉",
+  "😌",
+  "😍",
+  "🥰",
+  "😘",
+  "😗",
+  "😙",
+  "😚",
+  "😋",
+  "😛",
+  "❤️",
+  "🧡",
+  "💛",
+  "💚",
+  "💙",
+  "💜",
+  "🖤",
+  "🤍",
+  "🤎",
+  "💔",
+  "👍",
+  "👎",
+  "👊",
+  "✊",
+  "🤛",
+  "🤜",
+  "🤝",
+  "👏",
+  "🙌",
+  "👐",
+  "🎉",
+  "🎊",
+  "🎈",
+  "🎁",
+  "🎄",
+  "🎃",
+  "🎗️",
+  "🎟️",
+  "🎫",
+  "🏆",
+  "⭐",
+  "🌟",
+  "✨",
+  "💫",
+  "🌙",
+  "☀️",
+  "🌈",
+  "☁️",
+  "⛅",
+  "🌤️",
 ];
 function createEmojiArb(): Arbitrary<string> {
-  return fc.array(
-    fc.constantFrom(...COMMON_EMOJIS),
-    { minLength: 1, maxLength: 5 }
-  ).map((emojis) => emojis.join(''));
+  return fc
+    .array(fc.constantFrom(...COMMON_EMOJIS), { minLength: 1, maxLength: 5 })
+    .map((emojis) => emojis.join(""));
 }
 
 // ISO Date: YYYY-MM-DD format
 function createIsoDateArb(): Arbitrary<string> {
-  return fc.date({
-    min: new Date("0000-01-01"),
-    max: new Date("9999-12-31"),
-  }).map((date) => date.toISOString().split('T')[0]);
+  return fc
+    .date({
+      min: new Date("0000-01-01"),
+      max: new Date("9999-12-31"),
+    })
+    .map((date) => date.toISOString().split("T")[0]);
 }
 
 // ISO Time: HH:mm:ss or HH:mm:ss.sss format (with optional timezone)
@@ -948,120 +1093,144 @@ function createIsoTimeArb(schema: Zod4Schema): Arbitrary<string> {
   // Check for precision in the schema definition
   const precision = (schema._def as any).precision ?? 3;
 
-  return fc.tuple(
-    fc.integer({ min: 0, max: 23 }),
-    fc.integer({ min: 0, max: 59 }),
-    fc.integer({ min: 0, max: 59 }),
-    precision > 0 ? fc.integer({ min: 0, max: Math.pow(10, precision) - 1 }) : fc.constant(0)
-  ).map(([h, m, s, ms]) => {
-    const time = `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-    if (precision > 0 && ms > 0) {
-      return `${time}.${ms.toString().padStart(precision, '0')}`;
-    }
-    return time;
-  });
+  return fc
+    .tuple(
+      fc.integer({ min: 0, max: 23 }),
+      fc.integer({ min: 0, max: 59 }),
+      fc.integer({ min: 0, max: 59 }),
+      precision > 0
+        ? fc.integer({ min: 0, max: Math.pow(10, precision) - 1 })
+        : fc.constant(0)
+    )
+    .map(([h, m, s, ms]) => {
+      const time = `${h.toString().padStart(2, "0")}:${m
+        .toString()
+        .padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+      if (precision > 0 && ms > 0) {
+        return `${time}.${ms.toString().padStart(precision, "0")}`;
+      }
+      return time;
+    });
 }
 
 // ISO Duration: P[n]Y[n]M[n]DT[n]H[n]M[n]S format
 function createIsoDurationArb(): Arbitrary<string> {
-  return fc.record({
-    years: fc.option(fc.integer({ min: 0, max: 100 }), { nil: undefined }),
-    months: fc.option(fc.integer({ min: 0, max: 11 }), { nil: undefined }),
-    days: fc.option(fc.integer({ min: 0, max: 30 }), { nil: undefined }),
-    hours: fc.option(fc.integer({ min: 0, max: 23 }), { nil: undefined }),
-    minutes: fc.option(fc.integer({ min: 0, max: 59 }), { nil: undefined }),
-    seconds: fc.option(fc.integer({ min: 0, max: 59 }), { nil: undefined }),
-  }).map(({ years, months, days, hours, minutes, seconds }) => {
-    let duration = 'P';
-    if (years !== undefined) duration += `${years}Y`;
-    if (months !== undefined) duration += `${months}M`;
-    if (days !== undefined) duration += `${days}D`;
+  return fc
+    .record({
+      years: fc.option(fc.integer({ min: 0, max: 100 }), { nil: undefined }),
+      months: fc.option(fc.integer({ min: 0, max: 11 }), { nil: undefined }),
+      days: fc.option(fc.integer({ min: 0, max: 30 }), { nil: undefined }),
+      hours: fc.option(fc.integer({ min: 0, max: 23 }), { nil: undefined }),
+      minutes: fc.option(fc.integer({ min: 0, max: 59 }), { nil: undefined }),
+      seconds: fc.option(fc.integer({ min: 0, max: 59 }), { nil: undefined }),
+    })
+    .map(({ years, months, days, hours, minutes, seconds }) => {
+      let duration = "P";
+      if (years !== undefined) duration += `${years}Y`;
+      if (months !== undefined) duration += `${months}M`;
+      if (days !== undefined) duration += `${days}D`;
 
-    if (hours !== undefined || minutes !== undefined || seconds !== undefined) {
-      duration += 'T';
-      if (hours !== undefined) duration += `${hours}H`;
-      if (minutes !== undefined) duration += `${minutes}M`;
-      if (seconds !== undefined) duration += `${seconds}S`;
-    }
+      if (
+        hours !== undefined ||
+        minutes !== undefined ||
+        seconds !== undefined
+      ) {
+        duration += "T";
+        if (hours !== undefined) duration += `${hours}H`;
+        if (minutes !== undefined) duration += `${minutes}M`;
+        if (seconds !== undefined) duration += `${seconds}S`;
+      }
 
-    // Ensure we have at least one component
-    if (duration === 'P') duration = 'P0D';
-    if (duration === 'PT') duration = 'PT0S';
+      // Ensure we have at least one component
+      if (duration === "P") duration = "P0D";
+      if (duration === "PT") duration = "PT0S";
 
-    return duration;
-  });
+      return duration;
+    });
 }
 
 // Hostname: Valid DNS hostname
 // Pattern: label.label.label where each label is alphanumeric with hyphens (not at start/end)
 function createHostnameArb(): Arbitrary<string> {
   // Create a valid label (1-63 chars, alphanumeric, can have hyphens in middle)
-  const labelArb = fc.tuple(
-    fc.constantFrom(...'abcdefghijklmnopqrstuvwxyz0123456789'.split('')),
-    fc.stringOf(
-      fc.constantFrom(...'abcdefghijklmnopqrstuvwxyz0123456789-'.split('')),
-      { minLength: 0, maxLength: 10 }
-    ),
-    fc.constantFrom(...'abcdefghijklmnopqrstuvwxyz0123456789'.split(''))
-  ).map(([first, middle, last]) => {
-    // Remove consecutive hyphens and ensure no leading/trailing hyphen
-    const cleaned = middle.replace(/-{2,}/g, '-').replace(/^-|-$/g, '');
-    return first + cleaned + last;
-  });
+  const labelArb = fc
+    .tuple(
+      fc.constantFrom(..."abcdefghijklmnopqrstuvwxyz0123456789".split("")),
+      fc.stringOf(
+        fc.constantFrom(..."abcdefghijklmnopqrstuvwxyz0123456789-".split("")),
+        { minLength: 0, maxLength: 10 }
+      ),
+      fc.constantFrom(..."abcdefghijklmnopqrstuvwxyz0123456789".split(""))
+    )
+    .map(([first, middle, last]) => {
+      // Remove consecutive hyphens and ensure no leading/trailing hyphen
+      const cleaned = middle.replace(/-{2,}/g, "-").replace(/^-|-$/g, "");
+      return first + cleaned + last;
+    });
 
   // Create a TLD (2+ chars, letters only)
   const tldArb = fc.stringOf(
-    fc.constantFrom(...'abcdefghijklmnopqrstuvwxyz'.split('')),
+    fc.constantFrom(..."abcdefghijklmnopqrstuvwxyz".split("")),
     { minLength: 2, maxLength: 6 }
   );
 
-  return fc.tuple(
-    fc.array(labelArb, { minLength: 0, maxLength: 2 }),
-    labelArb,
-    tldArb
-  ).map(([subdomains, domain, tld]) => {
-    const parts = [...subdomains, domain, tld];
-    return parts.join('.');
-  });
+  return fc
+    .tuple(fc.array(labelArb, { minLength: 0, maxLength: 2 }), labelArb, tldArb)
+    .map(([subdomains, domain, tld]) => {
+      const parts = [...subdomains, domain, tld];
+      return parts.join(".");
+    });
 }
 
 // JWT: Three base64url segments joined by "."
 // Header must be valid JSON with at least "alg" field
 function createJwtArb(): Arbitrary<string> {
-  const algorithms = ['HS256', 'HS384', 'HS512', 'RS256', 'RS384', 'RS512', 'ES256', 'ES384', 'ES512'];
+  const algorithms = [
+    "HS256",
+    "HS384",
+    "HS512",
+    "RS256",
+    "RS384",
+    "RS512",
+    "ES256",
+    "ES384",
+    "ES512",
+  ];
 
   // Create a valid JWT header
   const headerArb = fc.constantFrom(...algorithms).map((alg) => {
-    const header = JSON.stringify({ alg, typ: 'JWT' });
+    const header = JSON.stringify({ alg, typ: "JWT" });
     const base64 = btoa(header);
-    return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   });
 
   // Create a simple payload
-  const payloadArb = fc.record({
-    sub: fc.string({ minLength: 1, maxLength: 20 }),
-    iat: fc.integer({ min: 1000000000, max: 2000000000 })
-  }).map((payload) => {
-    const json = JSON.stringify(payload);
-    const base64 = btoa(json);
-    return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-  });
+  const payloadArb = fc
+    .record({
+      sub: fc.string({ minLength: 1, maxLength: 20 }),
+      iat: fc.integer({ min: 1000000000, max: 2000000000 }),
+    })
+    .map((payload) => {
+      const json = JSON.stringify(payload);
+      const base64 = btoa(json);
+      return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    });
 
   // Create a random signature
-  const signatureArb = fc.array(fc.integer({ min: 0, max: 255 }), { minLength: 32, maxLength: 64 })
+  const signatureArb = fc
+    .array(fc.integer({ min: 0, max: 255 }), { minLength: 32, maxLength: 64 })
     .map((bytes) => {
       const uint8Array = new Uint8Array(bytes);
       const base64 = btoa(String.fromCharCode(...uint8Array));
-      return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+      return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
     });
 
-  return fc.tuple(headerArb, payloadArb, signatureArb)
+  return fc
+    .tuple(headerArb, payloadArb, signatureArb)
     .map(([header, payload, signature]) => `${header}.${payload}.${signature}`);
 }
 
-function createDatetimeStringArb(
-  schema: Zod4Schema
-): Arbitrary<string> {
+function createDatetimeStringArb(schema: Zod4Schema): Arbitrary<string> {
   // In Zod 4, datetime params are in the string_format check
   let precision: number | null = null;
   let offset = false;
@@ -1069,7 +1238,7 @@ function createDatetimeStringArb(
   const checks = schema._def.checks ?? [];
   for (const check of checks) {
     const checkDef = check._zod?.def ?? check;
-    if (checkDef.check === 'string_format' && checkDef.format === 'datetime') {
+    if (checkDef.check === "string_format" && checkDef.format === "datetime") {
       precision = checkDef.precision ?? null;
       offset = checkDef.offset ?? false;
       break;

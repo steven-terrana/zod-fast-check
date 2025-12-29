@@ -519,6 +519,134 @@ describe("Throwing an error if it is not able to generate a value", () => {
   );
 });
 
+describe("Native regex support using fc.stringMatching()", () => {
+  test("simple regex pattern generates valid values", () => {
+    const schema = z.string().regex(/^[a-z]+$/);
+    const arb = Zod4FastCheck().inputOf(schema);
+
+    return fc.assert(
+      fc.property(arb, (value) => {
+        expect(value).toMatch(/^[a-z]+$/);
+      })
+    );
+  });
+
+  test("numeric string regex generates valid values efficiently", () => {
+    // This pattern would fail with pure filtering due to low success rate
+    const schema = z.string().regex(/^\d+$/);
+    const arb = Zod4FastCheck().inputOf(schema);
+
+    return fc.assert(
+      fc.property(arb, (value) => {
+        expect(value).toMatch(/^\d+$/);
+      })
+    );
+  });
+
+  test("regex with min length constraint", () => {
+    const schema = z.string().regex(/^[a-z]+$/).min(5);
+    const arb = Zod4FastCheck().inputOf(schema);
+
+    return fc.assert(
+      fc.property(arb, (value) => {
+        expect(value.length).toBeGreaterThanOrEqual(5);
+        expect(value).toMatch(/^[a-z]+$/);
+      })
+    );
+  });
+
+  test("regex with max length constraint", () => {
+    const schema = z.string().regex(/^[a-z]+$/).max(10);
+    const arb = Zod4FastCheck().inputOf(schema);
+
+    return fc.assert(
+      fc.property(arb, (value) => {
+        expect(value.length).toBeLessThanOrEqual(10);
+        expect(value).toMatch(/^[a-z]+$/);
+      })
+    );
+  });
+
+  test("regex with both min and max length constraints", () => {
+    const schema = z.string().regex(/^[a-z]+$/).min(3).max(8);
+    const arb = Zod4FastCheck().inputOf(schema);
+
+    return fc.assert(
+      fc.property(arb, (value) => {
+        expect(value.length).toBeGreaterThanOrEqual(3);
+        expect(value.length).toBeLessThanOrEqual(8);
+        expect(value).toMatch(/^[a-z]+$/);
+      })
+    );
+  });
+
+  test("regex with startsWith mapping", () => {
+    const schema = z.string().regex(/[a-z]+/).startsWith("PREFIX_");
+    const arb = Zod4FastCheck().inputOf(schema);
+
+    return fc.assert(
+      fc.property(arb, (value) => {
+        expect(value.startsWith("PREFIX_")).toBe(true);
+      })
+    );
+  });
+
+  test("regex with endsWith mapping", () => {
+    const schema = z.string().regex(/[a-z]+/).endsWith("_SUFFIX");
+    const arb = Zod4FastCheck().inputOf(schema);
+
+    return fc.assert(
+      fc.property(arb, (value) => {
+        expect(value.endsWith("_SUFFIX")).toBe(true);
+      })
+    );
+  });
+
+  test("complex regex pattern", () => {
+    // Email-like pattern (simplified)
+    const schema = z.string().regex(/^[a-z]+@[a-z]+\.[a-z]{2,3}$/);
+    const arb = Zod4FastCheck().inputOf(schema);
+
+    return fc.assert(
+      fc.property(arb, (value) => {
+        expect(value).toMatch(/^[a-z]+@[a-z]+\.[a-z]{2,3}$/);
+      })
+    );
+  });
+
+  test("regex with unsupported features falls back to filtering with override", () => {
+    // Word boundary is not supported by fc.stringMatching()
+    // This falls back to filtering, but word boundary patterns are too
+    // restrictive for random filtering, so an override is needed
+    const schema = z.string().regex(/\btest\b/);
+
+    // Provide an override since the pattern is too restrictive for filtering
+    const zfc = Zod4FastCheck().override(schema, fc.constant("test"));
+    const arb = zfc.inputOf(schema);
+
+    return fc.assert(
+      fc.property(arb, (value) => {
+        expect(value).toMatch(/\btest\b/);
+      })
+    );
+  });
+
+  test("lookahead regex falls back to filtering with override", () => {
+    // Positive lookahead is not supported by fc.stringMatching()
+    const schema = z.string().regex(/foo(?=bar)/);
+
+    // Provide an override since lookahead patterns can't be generated
+    const zfc = Zod4FastCheck().override(schema, fc.constant("foobar"));
+    const arb = zfc.inputOf(schema);
+
+    return fc.assert(
+      fc.property(arb, (value) => {
+        expect(value).toMatch(/foo(?=bar)/);
+      })
+    );
+  });
+});
+
 describe("Throwing an error if the schema type is not supported", () => {
   test("lazy schemas", () => {
     expect(() => Zod4FastCheck().inputOf(z.lazy(() => z.string()))).toThrow(

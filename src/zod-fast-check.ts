@@ -726,4 +726,3 @@ const getValidEnumValues = (
   }
   return Object.values(filtered);
 };
-
