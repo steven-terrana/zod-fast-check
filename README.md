@@ -37,7 +37,24 @@ test("User's full name always contains their first and last names", () =>
   ));
 ```
 
-The main interface is the `ZodFastCheck` class, which has the following methods:
+## Zod Version Support
+
+This library supports both Zod 3 and Zod 4:
+
+- **Zod 3**: Use `ZodFastCheck` (as shown above)
+- **Zod 4**: Use `Zod4FastCheck`
+
+```ts
+import { Zod4FastCheck } from "zod-fast-check";
+
+const userArbitrary = Zod4FastCheck().inputOf(User);
+```
+
+The API is identical between versions. Zod 4 includes additional schema types and string formats documented below.
+
+## API
+
+The main interface is the `ZodFastCheck` class (or `Zod4FastCheck` for Zod 4), which has the following methods:
 
 ### inputOf
 
@@ -121,9 +138,48 @@ const arbitrary = zodFastCheck.inputOf(z.array(WithFoo));
 ✅ refinements (see below)  
 ✅ pipe  
 ✅ catch  
-❌ intersection  
-❌ lazy  
+❌ intersection
+❌ lazy
 ❌ never
+
+### Additional Zod 4 features
+
+The following are supported only in Zod 4 via `Zod4FastCheck`:
+
+**Schema types:**
+✅ xor (exclusive or union)
+✅ prefault
+✅ nonoptional
+✅ readonly
+✅ success
+✅ codec
+✅ strictObject / looseObject
+✅ keyof
+
+**String formats:**
+✅ ulid, nanoid, guid, xid, ksuid
+✅ ipv4, ipv6, cidrv4, cidrv6
+✅ mac, e164
+✅ base64, base64url, jwt, hex
+✅ emoji, hostname
+
+**ISO namespace:**
+✅ z.iso.datetime()
+✅ z.iso.date()
+✅ z.iso.time()
+✅ z.iso.duration()
+
+**Additional constraints:**
+✅ bigint: min, max, positive, negative
+✅ date: min, max
+✅ array: length
+✅ tuple: rest
+
+**Unsupported in Zod 4:**
+❌ json (uses lazy internally)
+❌ file
+❌ templateLiteral
+❌ custom
 
 ### Refinements
 

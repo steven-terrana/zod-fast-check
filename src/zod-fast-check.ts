@@ -32,7 +32,7 @@ import {
   ZodTuple,
   ZodTypeDef,
   ZodUnion,
-} from "zod";
+} from "zod3";
 
 const MIN_SUCCESS_RATE = 0.01;
 const ZOD_EMAIL_REGEX =
