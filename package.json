@@ -1,11 +1,29 @@
 {
-  "name": "zod-fast-check",
-  "version": "0.10.1",
+  "name": "@steven-terrana/zod-fast-check",
+  "version": "0.11.0",
   "description": "Generate fast-check arbitraries from Zod schemas.",
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
   "main": "dist/zod-fast-check.js",
   "types": "dist/zod-fast-check.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/zod-fast-check.js",
+      "types": "./dist/zod-fast-check.d.ts"
+    },
+    "./v3": {
+      "import": "./dist/zod-fast-check.js",
+      "types": "./dist/zod-fast-check.d.ts"
+    },
+    "./v4": {
+      "import": "./dist/zod4-fast-check.js",
+      "types": "./dist/zod4-fast-check.d.ts"
+    }
+  },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && npm run build:fix-imports",
+    "build:fix-imports": "node scripts/fix-imports.js",
     "lint": "prettier --check src",
     "test": "jest",
     "prepare": "npm run build",
@@ -49,6 +67,6 @@
   },
   "peerDependencies": {
     "fast-check": ">2.23.0 <4.0.0",
-    "zod": "^4.0.0"
+    "zod": "^3.0.0 || ^4.0.0"
   }
 }

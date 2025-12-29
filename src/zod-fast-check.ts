@@ -727,10 +727,3 @@ const getValidEnumValues = (
   return Object.values(filtered);
 };
 
-// Re-export Zod 4 support
-export {
-  Zod4FastCheck,
-  Zod4FastCheckError,
-  Zod4FastCheckUnsupportedSchemaError,
-  Zod4FastCheckGenerationError,
-} from './zod4-fast-check';

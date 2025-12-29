@@ -39,22 +39,21 @@ test("User's full name always contains their first and last names", () =>
 
 ## Zod Version Support
 
-This library supports both Zod 3 and Zod 4:
-
-- **Zod 3**: Use `ZodFastCheck` (as shown above)
-- **Zod 4**: Use `Zod4FastCheck`
+This library supports both Zod 3 and Zod 4 via separate entry points:
 
 ```ts
-import { Zod4FastCheck } from "zod-fast-check";
+// Zod 3 (default, backwards compatible)
+import { ZodFastCheck } from "zod-fast-check";
 
-const userArbitrary = Zod4FastCheck().inputOf(User);
+// Zod 4
+import { ZodFastCheck } from "zod-fast-check/v4";
 ```
 
 The API is identical between versions. Zod 4 includes additional schema types and string formats documented below.
 
 ## API
 
-The main interface is the `ZodFastCheck` class (or `Zod4FastCheck` for Zod 4), which has the following methods:
+The main interface is the `ZodFastCheck` class, which has the following methods:
 
 ### inputOf
 
@@ -144,7 +143,7 @@ const arbitrary = zodFastCheck.inputOf(z.array(WithFoo));
 
 ### Additional Zod 4 features
 
-The following are supported only in Zod 4 via `Zod4FastCheck`:
+The following are supported only when using `zod-fast-check/v4`:
 
 **Schema types:**
 ✅ xor (exclusive or union)

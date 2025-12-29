@@ -143,13 +143,13 @@ const SCALAR_TYPES = new Set<Zod4Type>([
 
 type OverrideArbitrary<Input = unknown> =
   | Arbitrary<Input>
-  | ((zfc: Zod4FastCheck) => Arbitrary<Input>);
+  | ((zfc: ZodFastCheck) => Arbitrary<Input>);
 
-class _Zod4FastCheck {
+class _ZodFastCheck {
   private overrides = new Map<Zod4Schema, OverrideArbitrary>();
 
-  private clone(): Zod4FastCheck {
-    const cloned = new _Zod4FastCheck();
+  private clone(): ZodFastCheck {
+    const cloned = new _ZodFastCheck();
     this.overrides.forEach((arbitrary, schema) => {
       cloned.overrides.set(schema, arbitrary);
     });
@@ -228,29 +228,29 @@ class _Zod4FastCheck {
   }
 
   /**
-   * Returns a new `Zod4FastCheck` instance which will use the provided
+   * Returns a new `ZodFastCheck` instance which will use the provided
    * arbitrary when generating inputs for the given schema.
    */
   override<Schema extends ZodSchema<any, any>>(
     schema: Schema,
     arbitrary: OverrideArbitrary<input<Schema>>
-  ): Zod4FastCheck {
+  ): ZodFastCheck {
     const withOverride = this.clone();
     withOverride.overrides.set(schema as unknown as Zod4Schema, arbitrary);
     return withOverride;
   }
 }
 
-export type Zod4FastCheck = _Zod4FastCheck;
+export type ZodFastCheck = _ZodFastCheck;
 
 // Wrapper function to allow instantiation without "new"
-export function Zod4FastCheck(): Zod4FastCheck {
-  return new _Zod4FastCheck();
+export function ZodFastCheck(): ZodFastCheck {
+  return new _ZodFastCheck();
 }
 
 // Reassign the wrapper function's prototype to ensure
 // "instanceof" works as expected.
-Zod4FastCheck.prototype = _Zod4FastCheck.prototype;
+ZodFastCheck.prototype = _ZodFastCheck.prototype;
 
 const arbitraryBuilders: ArbitraryBuilders = {
   // String type - uses _zod.bag for constraints, format for string formats
@@ -795,16 +795,16 @@ const arbitraryBuilders: ArbitraryBuilders = {
   },
 };
 
-export class Zod4FastCheckError extends Error {}
+export class ZodFastCheckError extends Error {}
 
-export class Zod4FastCheckUnsupportedSchemaError extends Zod4FastCheckError {}
+export class ZodFastCheckUnsupportedSchemaError extends ZodFastCheckError {}
 
-export class Zod4FastCheckGenerationError extends Zod4FastCheckError {}
+export class ZodFastCheckGenerationError extends ZodFastCheckError {}
 
 function unsupported(schemaTypeName: string, path: string): never {
   // Remove quotes from schemaTypeName if present (for consistency)
   const cleanName = schemaTypeName.replace(/^'|'$/g, '');
-  throw new Zod4FastCheckUnsupportedSchemaError(
+  throw new ZodFastCheckUnsupportedSchemaError(
     `Unable to generate valid values for Zod schema. ` +
       `${cleanName} schemas are not supported (at path '${path || "."}').`
   );
@@ -1159,7 +1159,7 @@ function throwIfSuccessRateBelow<Value, Refined extends Value>(
     if (isSuccess) successful += 1;
 
     if (total > MIN_RUNS && successful / total < rate) {
-      throw new Zod4FastCheckGenerationError(
+      throw new ZodFastCheckGenerationError(
         "Unable to generate valid values for Zod schema. " +
           `An override is must be provided for the schema at path '${
             path || "."
