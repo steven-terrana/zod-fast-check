@@ -702,6 +702,128 @@ describe("Throwing an error if the schema type is not supported", () => {
   });
 });
 
+describe("Zod 4 string constraint storage verification", () => {
+  test("min constraint stored in bag.minimum", () => {
+    const schema = z.string().min(5);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((schema as any)._zod?.bag?.minimum).toBe(5);
+  });
+
+  test("max constraint stored in bag.maximum", () => {
+    const schema = z.string().max(10);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((schema as any)._zod?.bag?.maximum).toBe(10);
+  });
+
+  test("length constraint sets both minimum and maximum", () => {
+    const schema = z.string().length(7);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const bag = (schema as any)._zod?.bag;
+    expect(bag?.minimum).toBe(7);
+    expect(bag?.maximum).toBe(7);
+  });
+});
+
+describe("Nested schemas with string constraints (PR #27 issue)", () => {
+  test("object with string min constraint", () => {
+    const schema = z.object({
+      field: z.string().min(5),
+    });
+    const arb = Zod4FastCheck().inputOf(schema);
+
+    return fc.assert(
+      fc.property(arb, (value) => {
+        expect(value.field.length).toBeGreaterThanOrEqual(5);
+        schema.parse(value);
+      })
+    );
+  });
+
+  test("object with string max constraint", () => {
+    const schema = z.object({
+      field: z.string().max(10),
+    });
+    const arb = Zod4FastCheck().inputOf(schema);
+
+    return fc.assert(
+      fc.property(arb, (value) => {
+        expect(value.field.length).toBeLessThanOrEqual(10);
+        schema.parse(value);
+      })
+    );
+  });
+
+  test("object with string length constraint", () => {
+    const schema = z.object({
+      field: z.string().length(8),
+    });
+    const arb = Zod4FastCheck().inputOf(schema);
+
+    return fc.assert(
+      fc.property(arb, (value) => {
+        expect(value.field.length).toBe(8);
+        schema.parse(value);
+      })
+    );
+  });
+
+  test("deeply nested object with string constraints", () => {
+    const schema = z.object({
+      user: z.object({
+        profile: z.object({
+          name: z.string().min(2).max(50),
+        }),
+      }),
+    });
+    const arb = Zod4FastCheck().inputOf(schema);
+
+    return fc.assert(
+      fc.property(arb, (value) => {
+        expect(value.user.profile.name.length).toBeGreaterThanOrEqual(2);
+        expect(value.user.profile.name.length).toBeLessThanOrEqual(50);
+        schema.parse(value);
+      })
+    );
+  });
+
+  test("array of objects with string constraints", () => {
+    const schema = z.array(
+      z.object({
+        id: z.string().length(10),
+      })
+    );
+    const arb = Zod4FastCheck().inputOf(schema);
+
+    return fc.assert(
+      fc.property(arb, (value) => {
+        for (const item of value) {
+          expect(item.id.length).toBe(10);
+        }
+        schema.parse(value);
+      })
+    );
+  });
+
+  test("object with multiple string fields with constraints", () => {
+    const schema = z.object({
+      firstname: z.string().min(1).max(30),
+      lastname: z.string().min(1).max(30),
+      email: z.string().email(),
+    });
+    const arb = Zod4FastCheck().inputOf(schema);
+
+    return fc.assert(
+      fc.property(arb, (value) => {
+        expect(value.firstname.length).toBeGreaterThanOrEqual(1);
+        expect(value.firstname.length).toBeLessThanOrEqual(30);
+        expect(value.lastname.length).toBeGreaterThanOrEqual(1);
+        expect(value.lastname.length).toBeLessThanOrEqual(30);
+        schema.parse(value);
+      })
+    );
+  });
+});
+
 function testIfSchemaSupported(
   name: string,
   buildSchema: () => ZodType,

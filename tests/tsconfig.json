@@ -2,6 +2,11 @@
   "extends": "../tsconfig.json",
   "include": ["./*"],
   "compilerOptions": {
-    "declaration": false
+    "declaration": false,
+    "baseUrl": "..",
+    "paths": {
+      "zod4": ["node_modules/zod4"],
+      "zod3": ["node_modules/zod3"]
+    }
   }
 }
