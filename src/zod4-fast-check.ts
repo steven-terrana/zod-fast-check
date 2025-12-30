@@ -279,6 +279,9 @@ const arbitraryBuilders: ArbitraryBuilders = {
     if (format === "url") {
       return fc.webUrl();
     }
+    if (format === "http_url") {
+      return fc.webUrl();
+    }
     if (format === "cuid") {
       return createCuidArb();
     }
@@ -293,7 +296,7 @@ const arbitraryBuilders: ArbitraryBuilders = {
       return createDatetimeStringArb(schema);
     }
     if (format === "ulid") {
-      return createUlidArb();
+      return fc.ulid();
     }
     if (format === "nanoid") {
       return createNanoidArb();
@@ -341,8 +344,24 @@ const arbitraryBuilders: ArbitraryBuilders = {
     if (format === "emoji") {
       return createEmojiArb();
     }
+    // Hash formats
+    if (format === "md5_hex") {
+      return fc.hexaString({ minLength: 32, maxLength: 32 });
+    }
+    if (format === "sha1_hex") {
+      return fc.hexaString({ minLength: 40, maxLength: 40 });
+    }
+    if (format === "sha256_hex") {
+      return fc.hexaString({ minLength: 64, maxLength: 64 });
+    }
+    if (format === "sha384_hex") {
+      return fc.hexaString({ minLength: 96, maxLength: 96 });
+    }
+    if (format === "sha512_hex") {
+      return fc.hexaString({ minLength: 128, maxLength: 128 });
+    }
     if (format === "hostname") {
-      return createHostnameArb();
+      return fc.domain();
     }
     // ISO namespace formats
     if (format === "date") {
@@ -910,16 +929,6 @@ function createCuidArb(): Arbitrary<string> {
     );
 }
 
-// ULID: 26 chars Crockford base32 (excludes I, L, O, U)
-// Pattern: /^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$/
-const CROCKFORD_BASE32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-function createUlidArb(): Arbitrary<string> {
-  return fc.stringOf(fc.constantFrom(...CROCKFORD_BASE32.split("")), {
-    minLength: 26,
-    maxLength: 26,
-  });
-}
-
 // NanoID: 21 chars URL-safe alphabet
 // Pattern: /^[a-zA-Z0-9_-]{21}$/
 const NANOID_ALPHABET =
@@ -1146,39 +1155,6 @@ function createIsoDurationArb(): Arbitrary<string> {
       if (duration === "PT") duration = "PT0S";
 
       return duration;
-    });
-}
-
-// Hostname: Valid DNS hostname
-// Pattern: label.label.label where each label is alphanumeric with hyphens (not at start/end)
-function createHostnameArb(): Arbitrary<string> {
-  // Create a valid label (1-63 chars, alphanumeric, can have hyphens in middle)
-  const labelArb = fc
-    .tuple(
-      fc.constantFrom(..."abcdefghijklmnopqrstuvwxyz0123456789".split("")),
-      fc.stringOf(
-        fc.constantFrom(..."abcdefghijklmnopqrstuvwxyz0123456789-".split("")),
-        { minLength: 0, maxLength: 10 }
-      ),
-      fc.constantFrom(..."abcdefghijklmnopqrstuvwxyz0123456789".split(""))
-    )
-    .map(([first, middle, last]) => {
-      // Remove consecutive hyphens and ensure no leading/trailing hyphen
-      const cleaned = middle.replace(/-{2,}/g, "-").replace(/^-|-$/g, "");
-      return first + cleaned + last;
-    });
-
-  // Create a TLD (2+ chars, letters only)
-  const tldArb = fc.stringOf(
-    fc.constantFrom(..."abcdefghijklmnopqrstuvwxyz".split("")),
-    { minLength: 2, maxLength: 6 }
-  );
-
-  return fc
-    .tuple(fc.array(labelArb, { minLength: 0, maxLength: 2 }), labelArb, tldArb)
-    .map(([subdomains, domain, tld]) => {
-      const parts = [...subdomains, domain, tld];
-      return parts.join(".");
     });
 }
 
